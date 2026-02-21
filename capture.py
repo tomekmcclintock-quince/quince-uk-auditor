@@ -29,28 +29,33 @@ def _click_first(page, selectors, timeout_ms: int = 2500) -> bool:
     return False
 
 
-def _clip_to_bbox(page, bbox: Dict[str, float], path: str) -> None:
-    # Ensure clip is within page bounds and non-negative
-    clip = {
-        "x": max(0, float(bbox["x"])),
-        "y": max(0, float(bbox["y"])),
-        "width": max(1, float(bbox["width"])),
-        "height": max(1, float(bbox["height"])),
-    }
-    page.screenshot(path=path, full_page=False, clip=clip)
+def _shot_viewport(page, path: str) -> None:
+    page.screenshot(path=path, full_page=False)
 
 
-def _clip_locator(page, locator, path: str, pad: int = 24, min_h: int = 360, max_h: int = 900) -> bool:
+def _clip_to_bbox(page, bbox: Dict[str, float], path: str) -> bool:
+    try:
+        clip = {
+            "x": max(0, float(bbox["x"])),
+            "y": max(0, float(bbox["y"])),
+            "width": max(50, float(bbox["width"])),
+            "height": max(50, float(bbox["height"])),
+        }
+        page.screenshot(path=path, full_page=False, clip=clip)
+        return True
+    except Exception:
+        return False
+
+
+def _clip_locator_bbox(page, locator, path: str, pad: int = 24, min_h: int = 520, max_h: int = 980) -> bool:
     """
-    Take a clipped screenshot around a locator, with padding.
-    Returns True if shot was taken.
+    Clip around a locator's bounding box with padding.
+    This is a fallback; preferred is clipping the *container* (see below).
     """
     try:
         if locator.count() == 0:
             return False
-
         locator.scroll_into_view_if_needed(timeout=4000)
-
         bbox = locator.bounding_box()
         if not bbox:
             return False
@@ -60,14 +65,43 @@ def _clip_locator(page, locator, path: str, pad: int = 24, min_h: int = 360, max
         w = bbox["width"] + pad * 2
         h = bbox["height"] + pad * 2
 
-        # Normalize height so we capture content, not a tiny line
         h = max(h, min_h)
         h = min(h, max_h)
 
-        _clip_to_bbox(page, {"x": x, "y": y, "width": w, "height": h}, path)
-        return True
+        return _clip_to_bbox(page, {"x": x, "y": y, "width": w, "height": h}, path)
     except Exception:
         return False
+
+
+def _section_container_from_trigger(trigger) -> Optional[object]:
+    """
+    Given an accordion trigger, return a locator for a reasonable container
+    that likely includes the expanded content.
+    We walk up a few ancestors and pick the first "big enough" box.
+    """
+    try:
+        # Try a few likely container levels
+        candidates = [
+            trigger.locator("xpath=ancestor-or-self::section[1]"),
+            trigger.locator("xpath=ancestor-or-self::div[contains(@class,'accordion')][1]"),
+            trigger.locator("xpath=ancestor-or-self::div[contains(@class,'Accordion')][1]"),
+            trigger.locator("xpath=ancestor-or-self::div[1]"),
+            trigger.locator("xpath=ancestor-or-self::div[2]"),
+            trigger.locator("xpath=ancestor-or-self::div[3]"),
+        ]
+        for c in candidates:
+            if c.count() == 0:
+                continue
+            bbox = c.first.bounding_box()
+            if not bbox:
+                continue
+            # If it's reasonably wide, it's probably a real container (not a skinny label column)
+            if bbox["width"] >= 600:
+                return c.first
+        # Fallback: just return the trigger itself
+        return trigger
+    except Exception:
+        return None
 
 
 def dismiss_overlays(page) -> None:
@@ -124,7 +158,6 @@ def dismiss_overlays(page) -> None:
             if dismissed:
                 continue
 
-            # last resort: remove dialog overlays if still present
             try:
                 has_dialog = page.locator("[role='dialog']").count() > 0
             except Exception:
@@ -159,22 +192,11 @@ def dismiss_overlays(page) -> None:
         return
 
 
-def _best_section_locator(page, names) -> Optional[object]:
-    """
-    Return a locator for the first matching section trigger among common patterns.
-    names: list[str] like ["Details"] or ["Care"]
-    """
-    for name in names:
-        # button/summary/role=button are common accordion triggers
-        loc = page.locator(
-            f"button:has-text('{name}'), summary:has-text('{name}'), [role='button']:has-text('{name}')"
-        ).first
-        try:
-            if loc.count() > 0:
-                return loc
-        except Exception:
-            continue
-    return None
+def _best_trigger(page, name: str):
+    # Common accordion trigger patterns
+    return page.locator(
+        f"button:has-text('{name}'), summary:has-text('{name}'), [role='button']:has-text('{name}'), text=/^{name}$/i"
+    ).first
 
 
 def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
@@ -198,7 +220,7 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
         page.goto(url, wait_until="networkidle", timeout=90_000)
         dismiss_overlays(page)
 
-        # -------- Expand Details before baseline screenshot --------
+        # Expand "Show more / Read more" before baseline screenshot
         _click_first(
             page,
             selectors=[
@@ -212,13 +234,14 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
             ],
         )
 
-        details_trigger = _best_section_locator(page, ["Details"])
-        if details_trigger:
-            try:
+        # Expand Details accordion if present
+        details_trigger = _best_trigger(page, "Details")
+        try:
+            if details_trigger.count() > 0:
                 details_trigger.scroll_into_view_if_needed(timeout=4000)
                 details_trigger.click(timeout=2500)
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         dismiss_overlays(page)
         try:
@@ -226,70 +249,74 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
         except Exception:
             pass
 
-        # Baseline full page (expanded state if possible)
+        # Baseline full page
         page.screenshot(path=paths["full_page"], full_page=True)
 
-        # Visible text for analysis/debugging (capped)
+        # Visible text excerpt
         try:
             visible_text = page.inner_text("body")
         except Exception:
             visible_text = ""
         visible_text = (visible_text or "").strip()[:12000]
 
-        # -------- Details clipped view (readable evidence) --------
-        # Try to clip around the Details trigger area or a nearby heading.
+        # -------- Details clipped view: clip the CONTAINER, not the trigger --------
         dismiss_overlays(page)
-        details_loc = None
-        if details_trigger:
-            details_loc = details_trigger
-        else:
-            # fallback: find "Details" text as anchor
-            details_loc = page.locator("text=/^details$/i").first
-
-        if details_loc and details_loc.count() > 0:
-            _clip_locator(page, details_loc, paths["details_view"], pad=24, min_h=520, max_h=950)
-        else:
-            # fallback: top viewport
-            page.evaluate("window.scrollTo(0, 0)")
-            page.screenshot(path=paths["details_view"], full_page=False)
-
-        # -------- Care clipped view (reliable anchor + expanded content) --------
-        dismiss_overlays(page)
-        care_trigger = _best_section_locator(page, ["Care"])
-
-        if care_trigger and care_trigger.count() > 0:
+        details_ok = False
+        try:
+            if details_trigger.count() > 0:
+                container = _section_container_from_trigger(details_trigger)
+                if container and container.count() > 0:
+                    details_ok = _clip_locator_bbox(page, container, paths["details_view"], pad=24, min_h=650, max_h=980)
+        except Exception:
+            details_ok = False
+        if not details_ok:
+            # fallback: viewport screenshot near the trigger
             try:
+                if details_trigger.count() > 0:
+                    details_trigger.scroll_into_view_if_needed(timeout=4000)
+            except Exception:
+                pass
+            _shot_viewport(page, paths["details_view"])
+
+        # -------- Care clipped view: clip CONTAINER around Care --------
+        dismiss_overlays(page)
+        care_trigger = _best_trigger(page, "Care")
+
+        care_ok = False
+        try:
+            if care_trigger.count() > 0:
                 care_trigger.scroll_into_view_if_needed(timeout=4000)
-                care_trigger.click(timeout=2500)
-            except Exception:
-                pass
+                try:
+                    care_trigger.click(timeout=2500)
+                except Exception:
+                    pass
 
-            try:
-                page.wait_for_timeout(300)
-            except Exception:
-                pass
+                try:
+                    page.wait_for_timeout(300)
+                except Exception:
+                    pass
 
-            dismiss_overlays(page)
-            _clip_locator(page, care_trigger, paths["care_view"], pad=24, min_h=620, max_h=1000)
-        else:
-            # fallback: scroll and try to anchor on "Care"
+                dismiss_overlays(page)
+
+                container = _section_container_from_trigger(care_trigger)
+                if container and container.count() > 0:
+                    care_ok = _clip_locator_bbox(page, container, paths["care_view"], pad=24, min_h=650, max_h=980)
+        except Exception:
+            care_ok = False
+
+        if not care_ok:
+            # fallback: scroll down and take viewport (always produces an image)
             try:
                 page.mouse.wheel(0, int(VIEWPORT["height"] * 1.5))
             except Exception:
                 pass
-            care_text = page.locator("text=/^care$/i").first
-            if care_text.count() > 0:
-                _clip_locator(page, care_text, paths["care_view"], pad=24, min_h=620, max_h=1000)
-            else:
-                page.screenshot(path=paths["care_view"], full_page=False)
+            _shot_viewport(page, paths["care_view"])
 
-        # -------- Size chart view (modal clipped if present) --------
-        # Go to top because size chart link is near top
+        # -------- Size chart view: modal bbox if present, else top viewport --------
         try:
             page.evaluate("window.scrollTo(0, 0)")
         except Exception:
             pass
-
         dismiss_overlays(page)
 
         opened = _click_first(
@@ -309,19 +336,16 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
                 page.wait_for_timeout(600)
             except Exception:
                 pass
-
             dismiss_overlays(page)
 
-            # Clip the modal/dialog itself for readable evidence
             dialog = page.locator("[role='dialog'], [aria-modal='true'], .modal, .Modal").first
             if dialog.count() > 0:
-                _clip_locator(page, dialog, paths["size_chart_view"], pad=18, min_h=520, max_h=980)
+                if not _clip_locator_bbox(page, dialog, paths["size_chart_view"], pad=18, min_h=520, max_h=980):
+                    _shot_viewport(page, paths["size_chart_view"])
             else:
-                # fallback: viewport
-                page.screenshot(path=paths["size_chart_view"], full_page=False)
+                _shot_viewport(page, paths["size_chart_view"])
         else:
-            # If there is no size chart (common), capture top viewport as evidence
-            page.screenshot(path=paths["size_chart_view"], full_page=False)
+            _shot_viewport(page, paths["size_chart_view"])
 
         browser.close()
 
