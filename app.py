@@ -1,8 +1,6 @@
-import os
 import re
 import time
 import uuid
-import subprocess
 from pathlib import Path
 
 import streamlit as st
@@ -17,22 +15,6 @@ URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
 def is_valid_url(url: str) -> bool:
     return bool(url and URL_RE.match(url.strip()))
-
-
-def ensure_playwright_browsers_installed() -> None:
-    """
-    Streamlit Cloud sometimes skips postBuild hooks.
-    This ensures Chromium exists before we try to launch it.
-    """
-    cache_dir = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.expanduser("~/.cache/ms-playwright")
-    chromium_marker = Path(cache_dir)
-
-    # If cache dir exists and isn't empty, assume installed
-    if chromium_marker.exists() and any(chromium_marker.iterdir()):
-        return
-
-    # Install Chromium
-    subprocess.check_call(["python", "-m", "playwright", "install", "chromium"])
 
 
 def run_audit(url: str) -> str:
@@ -57,14 +39,6 @@ with st.sidebar:
         "- Captures Care section and Size Chart/Guide (if present).\n"
         "- Generates a PDF report with findings."
     )
-
-# Ensure Playwright browser exists (runs once per container boot)
-try:
-    ensure_playwright_browsers_installed()
-except Exception as e:
-    st.error("Playwright Chromium installation failed on the server.")
-    st.exception(e)
-    st.stop()
 
 url = st.text_input("PDP URL", placeholder="https://www.quince.com/…")
 run_btn = st.button("Run audit", type="primary", disabled=not is_valid_url(url))
