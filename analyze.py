@@ -22,7 +22,7 @@ def analyze(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     client = OpenAI(api_key=api_key)
 
-    image_keys = ["full_page", "details_view", "care_view", "size_chart_view"]
+    image_keys = ["full_page", "care_view", "size_fit_view", "size_chart_view"]
     images: List[Dict[str, Any]] = []
     for k in image_keys:
         path = payload["paths"].get(k)
@@ -30,7 +30,6 @@ def analyze(payload: Dict[str, Any]) -> Dict[str, Any]:
             images.append({"type": "input_image", "image_url": data_url_png(path)})
 
     schema = {
-        "summary": "string",
         "findings": [
             {
                 "category": "Localization|Compliance",
@@ -40,7 +39,7 @@ def analyze(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "why_it_matters_uk": "string",
                 "where": "string (describe location + reference screenshot key)",
                 "recommendation": "string (exact copy/UX change; can be long)",
-                "evidence_screenshot": "one of: full_page, details_view, care_view, size_chart_view",
+                "evidence_screenshot": "one of: full_page, care_view, size_fit_view, size_chart_view",
             }
         ],
     }
@@ -60,10 +59,10 @@ Focus on TWO areas:
 2) Compliance readiness signals (price transparency, VAT/taxes clarity, delivery charges clarity, fibre/material composition disclosure).
 
 You will be given screenshots:
-- full_page: baseline PDP (full page)
-- details_view: clipped screenshot around the Details section (expanded)
-- care_view: clipped screenshot around the Care section (expanded)
-- size_chart_view: clipped screenshot of the Size Chart/Guide modal (if present) or top sizing area
+- full_page: baseline PDP (full page) with Details expanded if available
+- care_view: viewport screenshot around the Care section (scrolled, expanded if available)
+- size_fit_view: viewport screenshot around the Size & Fit section (scrolled, expanded if available)
+- size_chart_view: screenshot showing Size Chart/Guide modal if opened, otherwise top sizing area
 
 Return JSON in this schema:
 {json.dumps(schema, indent=2)}

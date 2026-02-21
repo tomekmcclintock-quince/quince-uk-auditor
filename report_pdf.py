@@ -9,6 +9,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
     PageBreak,
+    KeepTogether,
 )
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
@@ -41,41 +42,11 @@ def build_pdf(payload: Dict[str, Any], analysis: Dict[str, Any]) -> str:
 
     story = []
     story.append(Paragraph("UK PDP Readiness Audit", styles["Title"]))
-    story.append(Spacer(1, 8))
-    story.append(Paragraph(f"<b>URL:</b> {payload['url']}", styles["BodyText"]))
-    story.append(Spacer(1, 12))
-
-    summary = analysis.get("summary", "")
-    story.append(Paragraph("<b>Executive Summary</b>", styles["Heading2"]))
-    story.append(Paragraph((summary or "").replace("\n", "<br/>"), styles["BodyText"]))
-    story.append(Spacer(1, 14))
-
-    # ---------- Evidence Screenshots ----------
-    story.append(Paragraph("<b>Evidence Screenshots</b>", styles["Heading2"]))
     story.append(Spacer(1, 6))
+    story.append(Paragraph(f"<b>URL:</b> {payload['url']}", styles["BodyText"]))
+    story.append(Spacer(1, 10))
 
-    # One full page
-    fp = payload["paths"].get("full_page")
-    if fp and os.path.exists(fp):
-        story.append(Paragraph("Baseline PDP (full page; Details expanded if possible)", styles["Heading3"]))
-        story.append(_img(fp, 10.0, 6.5))
-        story.append(Spacer(1, 10))
-
-    # Clipped evidence shots (legible)
-    for label, title, w, h in [
-        ("details_view", "Details section (clipped; expanded content)", 10.0, 4.6),
-        ("care_view", "Care section (clipped; expanded content)", 10.0, 4.6),
-        ("size_chart_view", "Size chart / size guide (clipped modal if present)", 10.0, 4.6),
-    ]:
-        p = payload["paths"].get(label)
-        if p and os.path.exists(p):
-            story.append(Paragraph(title, styles["Heading3"]))
-            story.append(_img(p, w, h))
-            story.append(Spacer(1, 10))
-
-    story.append(PageBreak())
-
-    # ---------- Findings table (WRAPPED) ----------
+    # ---------- Findings table FIRST ----------
     story.append(Paragraph("<b>Findings (Actionable)</b>", styles["Heading2"]))
     story.append(Spacer(1, 8))
 
@@ -160,6 +131,32 @@ def build_pdf(payload: Dict[str, Any], analysis: Dict[str, Any]) -> str:
     )
 
     story.append(tbl)
+
+    story.append(PageBreak())
+
+    # ---------- Evidence Screenshots ----------
+    story.append(Paragraph("<b>Evidence Screenshots</b>", styles["Heading2"]))
+    story.append(Spacer(1, 6))
+
+    def add_shot(title: str, key: str, w: float, h: float) -> None:
+        p = payload["paths"].get(key)
+        if not p or not os.path.exists(p):
+            return
+        block = KeepTogether(
+            [
+                Paragraph(title, styles["Heading3"]),
+                Spacer(1, 4),
+                _img(p, w, h),
+                Spacer(1, 10),
+            ]
+        )
+        story.append(block)
+
+    # Keep captions + images together; choose sizes that fit in landscape letter
+    add_shot("Baseline PDP (full page; Details expanded if possible)", "full_page", 10.0, 5.8)
+    add_shot("Care section (scrolled view)", "care_view", 10.0, 4.2)
+    add_shot("Size & Fit section (scrolled view)", "size_fit_view", 10.0, 4.2)
+    add_shot("Size chart / size guide (modal if present)", "size_chart_view", 10.0, 4.2)
 
     doc.build(story)
     return pdf_path
