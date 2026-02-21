@@ -140,7 +140,7 @@ def _scroll_to_section_and_expand(page, section_name: str) -> bool:
     return False
 
 
-def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
+def capture_pdp(url: str, out_root: str = "out", locale: str = "en-GB") -> Tuple[str, Dict]:
     run_id = sha8(url)
     out_dir = os.path.join(out_root, run_id)
     shots_dir = os.path.join(out_dir, "screenshots")
@@ -155,7 +155,7 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport=VIEWPORT, locale="en-GB")
+        context = browser.new_context(viewport=VIEWPORT, locale=locale)
         page = context.new_page()
 
         page.goto(url, wait_until="networkidle", timeout=90_000)
@@ -276,4 +276,5 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
         "shots_dir": shots_dir,
         "paths": paths,
         "visible_text": visible_text,
+        "locale": locale,
     }

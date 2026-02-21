@@ -40,9 +40,14 @@ def build_pdf(payload: Dict[str, Any], analysis: Dict[str, Any]) -> str:
         bottomMargin=24,
     )
 
+    report_title = analysis.get("report_title") or payload.get("report_title") or "PDP Readiness Audit"
+    region_label = payload.get("region_label", "United Kingdom")
+
     story = []
-    story.append(Paragraph("UK PDP Readiness Audit", styles["Title"]))
+    story.append(Paragraph(report_title, styles["Title"]))
     story.append(Spacer(1, 6))
+    story.append(Paragraph(f"<b>Region:</b> {region_label}", styles["BodyText"]))
+    story.append(Spacer(1, 4))
     story.append(Paragraph(f"<b>URL:</b> {payload['url']}", styles["BodyText"]))
     story.append(Spacer(1, 10))
 
