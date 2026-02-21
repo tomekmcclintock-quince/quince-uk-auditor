@@ -1,6 +1,6 @@
-streamlit==1.37.1
-playwright==1.46.0
-reportlab==4.2.2
-python-dotenv==1.0.1
-openai==1.41.0
-beautifulsoup4==4.12.3
+streamlit
+playwright
+reportlab
+python-dotenv
+openai
+beautifulsoup4
