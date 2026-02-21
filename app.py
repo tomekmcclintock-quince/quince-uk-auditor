@@ -2,6 +2,7 @@ import os
 import re
 import time
 import uuid
+import subprocess
 from pathlib import Path
 
 import streamlit as st
@@ -9,7 +10,6 @@ import streamlit as st
 from capture import capture_pdp
 from analyze import analyze
 from report_pdf import build_pdf
-
 
 APP_TITLE = "UK PDP Readiness Auditor"
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
@@ -19,21 +19,28 @@ def is_valid_url(url: str) -> bool:
     return bool(url and URL_RE.match(url.strip()))
 
 
-def run_audit(url: str) -> str:
+def ensure_playwright_browsers_installed() -> None:
     """
-    Runs the full pipeline:
-    - capture screenshots
-    - call OpenAI analysis
-    - generate PDF
-    Returns path to the generated PDF.
+    Streamlit Cloud sometimes skips postBuild hooks.
+    This ensures Chromium exists before we try to launch it.
     """
+    cache_dir = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.expanduser("~/.cache/ms-playwright")
+    chromium_marker = Path(cache_dir)
 
-    # Use a unique out_root per run so multiple users / same URL won't collide.
+    # If cache dir exists and isn't empty, assume installed
+    if chromium_marker.exists() and any(chromium_marker.iterdir()):
+        return
+
+    # Install Chromium
+    subprocess.check_call(["python", "-m", "playwright", "install", "chromium"])
+
+
+def run_audit(url: str) -> str:
     run_root = Path("runs") / f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
     run_root.mkdir(parents=True, exist_ok=True)
 
     _, payload = capture_pdp(url, out_root=str(run_root))
-    analysis = analyze(payload)          # If OpenAI fails, we want the app to fail (as you requested)
+    analysis = analyze(payload)  # if OpenAI fails, do not generate PDF
     pdf_path = build_pdf(payload, analysis)
     return pdf_path
 
@@ -42,7 +49,6 @@ st.set_page_config(page_title=APP_TITLE, layout="centered")
 st.title(APP_TITLE)
 st.caption("Paste a Quince PDP URL → generates a PDF with screenshots + UK localization/compliance findings.")
 
-# --- Sidebar (optional) ---
 with st.sidebar:
     st.subheader("Notes")
     st.write(
@@ -52,15 +58,16 @@ with st.sidebar:
         "- Generates a PDF report with findings."
     )
 
-# --- Main UI ---
+# Ensure Playwright browser exists (runs once per container boot)
+try:
+    ensure_playwright_browsers_installed()
+except Exception as e:
+    st.error("Playwright Chromium installation failed on the server.")
+    st.exception(e)
+    st.stop()
+
 url = st.text_input("PDP URL", placeholder="https://www.quince.com/…")
-
-col1, col2 = st.columns([1, 2])
-with col1:
-    run_btn = st.button("Run audit", type="primary", disabled=not is_valid_url(url))
-
-with col2:
-    st.write("")
+run_btn = st.button("Run audit", type="primary", disabled=not is_valid_url(url))
 
 if run_btn:
     url = url.strip()
@@ -73,8 +80,6 @@ if run_btn:
             pdf_path = run_audit(url)
 
         st.success("Report ready!")
-
-        # Streamlit download button needs bytes
         with open(pdf_path, "rb") as f:
             pdf_bytes = f.read()
 
@@ -85,8 +90,6 @@ if run_btn:
             file_name=filename,
             mime="application/pdf",
         )
-
-        # Show where it is on server (helpful for debugging)
         st.caption(f"Server file: {pdf_path}")
 
     except Exception as e:
