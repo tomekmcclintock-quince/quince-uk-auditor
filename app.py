@@ -2,6 +2,7 @@ import os
 import re
 import time
 import uuid
+import sys
 import subprocess
 from pathlib import Path
 
@@ -14,8 +15,6 @@ from report_pdf import build_pdf
 APP_TITLE = "UK PDP Readiness Auditor"
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
-# Where Playwright should store browsers on Streamlit Cloud
-# (matches your Streamlit secrets setting)
 DEFAULT_BROWSERS_PATH = ".playwright"
 
 
@@ -25,30 +24,31 @@ def is_valid_url(url: str) -> bool:
 
 def ensure_playwright_chromium():
     """
-    Ensure Playwright Chromium is downloaded in the server environment.
+    Ensure Playwright Chromium is downloaded in the Streamlit environment.
 
-    This solves:
-      BrowserType.launch: Executable doesn't exist at .../.playwright/...
+    Important: Use sys.executable (Streamlit's venv python), NOT /usr/local/bin/python.
     """
     browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", DEFAULT_BROWSERS_PATH)
 
-    # Heuristic: if the chrome-headless-shell exists anywhere under browsers_path, we're good.
+    # If the chrome-headless-shell exists anywhere under browsers_path, assume installed.
     root = Path(browsers_path)
     if root.exists():
         matches = list(root.rglob("chrome-headless-shell"))
         if matches:
             return  # installed
 
-    # Otherwise install chromium and surface logs in case of failure
     env = os.environ.copy()
     env["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
 
-    cmd = ["python", "-m", "playwright", "install", "chromium"]
+    # Use the *current* Python interpreter (Streamlit venv)
+    cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
     if proc.returncode != 0:
         raise RuntimeError(
             "Playwright install failed.\n\n"
+            f"Python: {sys.executable}\n"
+            f"Command: {' '.join(cmd)}\n\n"
             f"STDOUT:\n{proc.stdout}\n\n"
             f"STDERR:\n{proc.stderr}\n"
         )
@@ -77,11 +77,11 @@ with st.sidebar:
         "- Generates a PDF report with findings."
     )
 
-# Ensure chromium exists before running anything
+# Ensure Chromium exists before any audit run
 try:
     ensure_playwright_chromium()
 except Exception as e:
-    st.error("Chromium is not installed in this Streamlit environment.")
+    st.error("Chromium is not installed (or could not be installed) in this Streamlit environment.")
     st.exception(e)
     st.stop()
 
