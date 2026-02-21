@@ -54,17 +54,18 @@ def build_pdf(payload: Dict[str, Any], analysis: Dict[str, Any]) -> str:
     story.append(Paragraph("<b>Evidence Screenshots</b>", styles["Heading2"]))
     story.append(Spacer(1, 6))
 
-    # Baseline full page
+    # One full page
     fp = payload["paths"].get("full_page")
     if fp and os.path.exists(fp):
-        story.append(Paragraph("Baseline PDP (full page)", styles["Heading3"]))
+        story.append(Paragraph("Baseline PDP (full page; Details expanded if possible)", styles["Heading3"]))
         story.append(_img(fp, 10.0, 6.5))
         story.append(Spacer(1, 10))
 
-    # Targeted viewport shots
+    # Clipped evidence shots (legible)
     for label, title, w, h in [
-        ("care_view", "Care section (scrolled view)", 10.0, 3.6),
-        ("size_chart_view", "Size chart / size guide (top view or modal)", 10.0, 3.6),
+        ("details_view", "Details section (clipped; expanded content)", 10.0, 4.6),
+        ("care_view", "Care section (clipped; expanded content)", 10.0, 4.6),
+        ("size_chart_view", "Size chart / size guide (clipped modal if present)", 10.0, 4.6),
     ]:
         p = payload["paths"].get(label)
         if p and os.path.exists(p):

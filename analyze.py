@@ -1,10 +1,4 @@
 import os
-try:
-    import streamlit as st
-    if "OPENAI_API_KEY" in st.secrets:
-        os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-except Exception:
-    pass
 import json
 import base64
 from typing import Dict, Any, List
@@ -28,7 +22,7 @@ def analyze(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     client = OpenAI(api_key=api_key)
 
-    image_keys = ["full_page", "care_view", "size_chart_view"]
+    image_keys = ["full_page", "details_view", "care_view", "size_chart_view"]
     images: List[Dict[str, Any]] = []
     for k in image_keys:
         path = payload["paths"].get(k)
@@ -46,7 +40,7 @@ def analyze(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "why_it_matters_uk": "string",
                 "where": "string (describe location + reference screenshot key)",
                 "recommendation": "string (exact copy/UX change; can be long)",
-                "evidence_screenshot": "one of: full_page, care_view, size_chart_view",
+                "evidence_screenshot": "one of: full_page, details_view, care_view, size_chart_view",
             }
         ],
     }
@@ -67,8 +61,9 @@ Focus on TWO areas:
 
 You will be given screenshots:
 - full_page: baseline PDP (full page)
-- care_view: viewport screenshot around the Care section (scrolled)
-- size_chart_view: viewport screenshot showing size chart/guide modal or top-of-page sizing area
+- details_view: clipped screenshot around the Details section (expanded)
+- care_view: clipped screenshot around the Care section (expanded)
+- size_chart_view: clipped screenshot of the Size Chart/Guide modal (if present) or top sizing area
 
 Return JSON in this schema:
 {json.dumps(schema, indent=2)}

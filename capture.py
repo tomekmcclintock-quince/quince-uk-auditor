@@ -1,6 +1,6 @@
 import os
 import hashlib
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 from playwright.sync_api import sync_playwright
 
@@ -16,7 +16,6 @@ def safe_mkdir(path: str) -> None:
 
 
 def _click_first(page, selectors, timeout_ms: int = 2500) -> bool:
-    """Try a list of selectors; click the first that appears/can be clicked."""
     for sel in selectors:
         try:
             loc = page.locator(sel).first
@@ -30,56 +29,78 @@ def _click_first(page, selectors, timeout_ms: int = 2500) -> bool:
     return False
 
 
-def _shot_viewport(page, path: str) -> None:
-    """Viewport-only screenshot (no full_page) to keep PDFs compact."""
-    page.screenshot(path=path, full_page=False)
+def _clip_to_bbox(page, bbox: Dict[str, float], path: str) -> None:
+    # Ensure clip is within page bounds and non-negative
+    clip = {
+        "x": max(0, float(bbox["x"])),
+        "y": max(0, float(bbox["y"])),
+        "width": max(1, float(bbox["width"])),
+        "height": max(1, float(bbox["height"])),
+    }
+    page.screenshot(path=path, full_page=False, clip=clip)
+
+
+def _clip_locator(page, locator, path: str, pad: int = 24, min_h: int = 360, max_h: int = 900) -> bool:
+    """
+    Take a clipped screenshot around a locator, with padding.
+    Returns True if shot was taken.
+    """
+    try:
+        if locator.count() == 0:
+            return False
+
+        locator.scroll_into_view_if_needed(timeout=4000)
+
+        bbox = locator.bounding_box()
+        if not bbox:
+            return False
+
+        x = max(0, bbox["x"] - pad)
+        y = max(0, bbox["y"] - pad)
+        w = bbox["width"] + pad * 2
+        h = bbox["height"] + pad * 2
+
+        # Normalize height so we capture content, not a tiny line
+        h = max(h, min_h)
+        h = min(h, max_h)
+
+        _clip_to_bbox(page, {"x": x, "y": y, "width": w, "height": h}, path)
+        return True
+    except Exception:
+        return False
 
 
 def dismiss_overlays(page) -> None:
     """
-    Dismiss common overlays/popups:
-    - Email capture modal (your $40 off modal)
-    - Cookie banners
-    - Generic dialogs
-    Runs "best effort" and never raises.
+    Best-effort dismiss for email capture / cookie / modal overlays.
+    Never raises.
     """
     try:
-        # Try a few times; some overlays appear slightly after load.
         for _ in range(3):
             dismissed = False
-
-            # 1) If there's a dialog/modal, try clicking an X/close button inside it.
             dismissed |= _click_first(
                 page,
                 selectors=[
-                    # Common "X" close buttons within dialogs/modals
                     "[role='dialog'] button[aria-label='Close']",
                     "[role='dialog'] [aria-label='Close']",
                     "[role='dialog'] button:has-text('Close')",
                     "[role='dialog'] button:has-text('No Thanks')",
                     "[role='dialog'] button:has-text('No thanks')",
                     "[role='dialog'] button:has-text('Not now')",
-                    "[role='dialog'] button:has-text('Dismiss')",
-                    # Sometimes it's just a generic modal container
                     ".modal button[aria-label='Close']",
                     ".modal [aria-label='Close']",
-                    ".modal button:has-text('Close')",
-                    # Icon-only close buttons
                     "button[aria-label='Close']",
                     "[aria-label='Close']",
                     "button[title='Close']",
                     "[title='Close']",
                 ],
             )
-
-            # 2) Click common text CTAs that dismiss marketing popups / cookie prompts
             dismissed |= _click_first(
                 page,
                 selectors=[
                     "button:has-text('No thanks')",
                     "button:has-text('No Thanks')",
                     "button:has-text('Not now')",
-                    "button:has-text('Continue without')",
                     "button:has-text('Reject all')",
                     "button:has-text('Reject All')",
                     "button:has-text('Decline')",
@@ -90,24 +111,20 @@ def dismiss_overlays(page) -> None:
                 ],
             )
 
-            # 3) Press Escape (often closes the email capture modal)
             try:
                 page.keyboard.press("Escape")
             except Exception:
                 pass
 
-            # Small wait for UI to update
             try:
                 page.wait_for_timeout(250)
             except Exception:
                 pass
 
-            # If we clicked something, do one more loop to catch stacked overlays
             if dismissed:
                 continue
 
-            # 4) If a dialog still exists, last-resort: remove overlay layers
-            # (This is safe for screenshot capture; it doesn't affect server state.)
+            # last resort: remove dialog overlays if still present
             try:
                 has_dialog = page.locator("[role='dialog']").count() > 0
             except Exception:
@@ -137,12 +154,27 @@ def dismiss_overlays(page) -> None:
                     )
                 except Exception:
                     pass
-
-            # Done
             break
     except Exception:
-        # Never block the run
         return
+
+
+def _best_section_locator(page, names) -> Optional[object]:
+    """
+    Return a locator for the first matching section trigger among common patterns.
+    names: list[str] like ["Details"] or ["Care"]
+    """
+    for name in names:
+        # button/summary/role=button are common accordion triggers
+        loc = page.locator(
+            f"button:has-text('{name}'), summary:has-text('{name}'), [role='button']:has-text('{name}')"
+        ).first
+        try:
+            if loc.count() > 0:
+                return loc
+        except Exception:
+            continue
+    return None
 
 
 def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
@@ -153,8 +185,9 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
 
     paths = {
         "full_page": os.path.join(shots_dir, "01_full_page.png"),
-        "care_view": os.path.join(shots_dir, "02_care_view.png"),
-        "size_chart_view": os.path.join(shots_dir, "03_size_chart_view.png"),
+        "details_view": os.path.join(shots_dir, "02_details_view.png"),
+        "care_view": os.path.join(shots_dir, "03_care_view.png"),
+        "size_chart_view": os.path.join(shots_dir, "04_size_chart_view.png"),
     }
 
     with sync_playwright() as p:
@@ -163,11 +196,9 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
         page = context.new_page()
 
         page.goto(url, wait_until="networkidle", timeout=90_000)
-
-        # Important: dismiss any popups before doing anything else
         dismiss_overlays(page)
 
-        # -------- Expand Details BEFORE baseline full-page screenshot --------
+        # -------- Expand Details before baseline screenshot --------
         _click_first(
             page,
             selectors=[
@@ -180,24 +211,22 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
                 "text=/more details/i",
             ],
         )
-        _click_first(
-            page,
-            selectors=[
-                "button:has-text('Details')",
-                "text=/^details$/i",
-                "[aria-controls*='details']",
-                "[data-testid*='details']",
-            ],
-        )
 
-        # Dismiss again (some sites trigger popups after interaction)
+        details_trigger = _best_section_locator(page, ["Details"])
+        if details_trigger:
+            try:
+                details_trigger.scroll_into_view_if_needed(timeout=4000)
+                details_trigger.click(timeout=2500)
+            except Exception:
+                pass
+
         dismiss_overlays(page)
-
         try:
             page.wait_for_timeout(400)
         except Exception:
             pass
 
+        # Baseline full page (expanded state if possible)
         page.screenshot(path=paths["full_page"], full_page=True)
 
         # Visible text for analysis/debugging (capped)
@@ -207,42 +236,55 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
             visible_text = ""
         visible_text = (visible_text or "").strip()[:12000]
 
-        # -------- Care view: scroll to a reliable anchor --------
+        # -------- Details clipped view (readable evidence) --------
+        # Try to clip around the Details trigger area or a nearby heading.
         dismiss_overlays(page)
+        details_loc = None
+        if details_trigger:
+            details_loc = details_trigger
+        else:
+            # fallback: find "Details" text as anchor
+            details_loc = page.locator("text=/^details$/i").first
 
-        care_clicked = _click_first(
-            page,
-            selectors=[
-                "button:has-text('Care')",
-                "summary:has-text('Care')",
-                "[role='button']:has-text('Care')",
-                "[aria-controls*='care']",
-                "text=/^care$/i",
-            ],
-        )
+        if details_loc and details_loc.count() > 0:
+            _clip_locator(page, details_loc, paths["details_view"], pad=24, min_h=520, max_h=950)
+        else:
+            # fallback: top viewport
+            page.evaluate("window.scrollTo(0, 0)")
+            page.screenshot(path=paths["details_view"], full_page=False)
 
-        # Scroll precisely to a Care header/button if present; else fallback scroll
-        try:
-            care_loc = page.locator(
-                "button:has-text('Care'), summary:has-text('Care'), [role='button']:has-text('Care'), text=/^care$/i"
-            ).first
-            if care_loc.count() > 0:
-                care_loc.scroll_into_view_if_needed(timeout=4000)
-            else:
-                page.mouse.wheel(0, int(VIEWPORT["height"] * 1.5))
-        except Exception:
-            pass
+        # -------- Care clipped view (reliable anchor + expanded content) --------
+        dismiss_overlays(page)
+        care_trigger = _best_section_locator(page, ["Care"])
 
-        if care_clicked:
+        if care_trigger and care_trigger.count() > 0:
+            try:
+                care_trigger.scroll_into_view_if_needed(timeout=4000)
+                care_trigger.click(timeout=2500)
+            except Exception:
+                pass
+
             try:
                 page.wait_for_timeout(300)
             except Exception:
                 pass
 
-        dismiss_overlays(page)
-        _shot_viewport(page, paths["care_view"])
+            dismiss_overlays(page)
+            _clip_locator(page, care_trigger, paths["care_view"], pad=24, min_h=620, max_h=1000)
+        else:
+            # fallback: scroll and try to anchor on "Care"
+            try:
+                page.mouse.wheel(0, int(VIEWPORT["height"] * 1.5))
+            except Exception:
+                pass
+            care_text = page.locator("text=/^care$/i").first
+            if care_text.count() > 0:
+                _clip_locator(page, care_text, paths["care_view"], pad=24, min_h=620, max_h=1000)
+            else:
+                page.screenshot(path=paths["care_view"], full_page=False)
 
-        # -------- Size chart view: top-of-page modal or link --------
+        # -------- Size chart view (modal clipped if present) --------
+        # Go to top because size chart link is near top
         try:
             page.evaluate("window.scrollTo(0, 0)")
         except Exception:
@@ -250,7 +292,7 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
 
         dismiss_overlays(page)
 
-        opened_size_chart = _click_first(
+        opened = _click_first(
             page,
             selectors=[
                 "a:has-text('Size Chart')",
@@ -262,14 +304,24 @@ def capture_pdp(url: str, out_root: str = "out") -> Tuple[str, Dict]:
             ],
         )
 
-        if opened_size_chart:
+        if opened:
             try:
                 page.wait_for_timeout(600)
             except Exception:
                 pass
 
-        dismiss_overlays(page)
-        _shot_viewport(page, paths["size_chart_view"])
+            dismiss_overlays(page)
+
+            # Clip the modal/dialog itself for readable evidence
+            dialog = page.locator("[role='dialog'], [aria-modal='true'], .modal, .Modal").first
+            if dialog.count() > 0:
+                _clip_locator(page, dialog, paths["size_chart_view"], pad=18, min_h=520, max_h=980)
+            else:
+                # fallback: viewport
+                page.screenshot(path=paths["size_chart_view"], full_page=False)
+        else:
+            # If there is no size chart (common), capture top viewport as evidence
+            page.screenshot(path=paths["size_chart_view"], full_page=False)
 
         browser.close()
 
