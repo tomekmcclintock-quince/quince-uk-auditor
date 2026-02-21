@@ -62,6 +62,7 @@ def analyze(payload: Dict[str, Any], region: Optional[Dict[str, Any]] = None) ->
         f"You are an e-commerce PDP auditor for {region['label']} launch readiness. "
         "You produce actionable findings for Merch and Design with exact copy/UX recommendations. "
         "You are not a lawyer; flag potential compliance issues for Legal review when appropriate. "
+        "CRITICAL: Write ALL output text in ENGLISH (you may quote short on-page strings as evidence). "
         "Return valid JSON only."
     )
 
@@ -73,6 +74,10 @@ def analyze(payload: Dict[str, Any], region: Optional[Dict[str, Any]] = None) ->
 Audit this product page for {region['label']} readiness.
 
 Language expectation: {region.get("analysis_language", "English")}
+
+OUTPUT LANGUAGE REQUIREMENT:
+- You MUST write ALL findings in ENGLISH.
+- Do NOT write French or German in any field values (except short quoted evidence).
 
 Focus on TWO areas:
 1) {focus_1}
