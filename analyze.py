@@ -105,7 +105,7 @@ Visible text excerpt (may be incomplete):
     content = [{"type": "input_text", "text": user_text}] + images
 
     resp = client.responses.create(
-        model="gpt-4.1",
+        model="gpt-5.2",
         input=[
             {"role": "system", "content": system},
             {"role": "user", "content": content},
